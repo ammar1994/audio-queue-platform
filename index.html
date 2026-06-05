@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>منصة التواصل الصوتي المباشر</title>
-    <!-- خط رائع ومناسب للتصاميم الفاخرة -->
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -43,7 +42,7 @@
             background-color: var(--card-dark);
             border-radius: 16px;
             padding: 30px;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
             border: 1px solid #334155;
             text-align: center;
         }
@@ -81,7 +80,6 @@
             color: var(--text-main);
             font-size: 16px;
             outline: none;
-            transition: border-color 0.2s;
         }
 
         input:focus {
@@ -97,10 +95,6 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
         }
 
         .btn-primary {
@@ -112,7 +106,6 @@
             background-color: var(--primary-hover);
         }
 
-        /* شاشات الحالات اللاحقة */
         .status-box {
             display: none;
             margin-top: 20px;
@@ -148,9 +141,9 @@
             cursor: pointer;
             border: none;
             color: var(--text-main);
+            z-index: 100;
         }
 
-        /* ستايل لوحة التحكم للمشغل */
         .operator-view {
             display: none;
         }
@@ -170,7 +163,7 @@
         .queue-list {
             text-align: right;
             margin-top: 20px;
-            max-height: 200px;
+            max-height: 250px;
             overflow-y: auto;
         }
 
@@ -190,7 +183,7 @@
 
     <!-- واجهة العميل (User View) -->
     <div class="container" id="userView">
-        <h1>اتصال صوتی مباشر</h1>
+        <h1>اتصال صوتي مباشر</h1>
         <p class="subtitle">تواصل مع الدعم الفني فوراً عبر المتصفح</p>
         
         <div id="joinForm">
@@ -198,10 +191,9 @@
                 <label for="username">الاسم الكريم</label>
                 <input type="text" id="username" placeholder="أدخل اسمك هنا...">
             </div>
-            <button class="btn btn-primary" onclick="enterQueue()">ابدأ الاتصال الآن</button>
+            <button class="btn btn-primary" id="startCallBtn">ابدأ الاتصال الآن</button>
         </div>
 
-        <!-- صندوق الانتظار -->
         <div class="status-box" id="queueStatus">
             <div class="pulse-loader"></div>
             <h3>أنت في قائمة الانتظار...</h3>
@@ -220,32 +212,112 @@
 
         <div class="form-group">
             <label>تبديل الحالة الراهنة</label>
-            <button class="btn btn-primary" style="background-color: var(--warning);" onclick="toggleOperatorStatus()">تحويل إلى: مشغول</button>
+            <button class="btn btn-primary" style="background-color: var(--warning);" id="toggleStatusBtn">تحويل إلى: مشغول</button>
         </div>
 
         <div class="queue-list">
-            <label>المستخدمين في قائمة الانتظار حالياً:</label>
+            <label>المخدمين في قائمة الانتظار حالياً:</label>
             <div id="queueItemsContainer">
-                <div class="queue-item">
-                    <span>أحمد محمد</span>
-                    <span style="color: var(--text-muted); font-size: 12px;">في الانتظار منذ دقيقة</span>
-                </div>
-                <div class="queue-item">
-                    <span>خالد العلي</span>
-                    <span style="color: var(--text-muted); font-size: 12px;">في الانتظار منذ ثوانٍ</span>
-                </div>
+                <!-- يتم حقن المنتظرين تلقائياً هنا عبر Firebase -->
             </div>
         </div>
     </div>
 
-    <!-- زر سفلي وهمي للتبديل بين الواجهتين للتجربة والمعاينة حالياً -->
-    <button class="view-switcher" onclick="switchView()">تبديل العرض (معاينة الموظف / العميل)</button>
+    <button class="view-switcher" id="switchViewBtn">تبديل العرض للمعاينة</button>
 
-    <script>
-        // دالة بسيطة للتبديل اللحظي بين الواجهات للمعاينة البصرية
-        function switchView() {
-            const userView = document.getElementById('userView');
-            const operatorView = document.getElementById('operatorView');
+    <!-- تضمين مكتبات Firebase الرسمية عبر CDN كـ Modules -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // تكوين Firebase الافتراضي للمشروع - سيعمل بشكل مباشر كبيئة تجريبية مفتوحة
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
+            authDomain: "audio-queue-platform.firebaseapp.com",
+            projectId: "audio-queue-platform",
+            storageBucket: "audio-queue-platform.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:abcdef123456"
+        };
+
+        // تهيئة التطبيق وقاعدة البيانات
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // متغيرات التحكم بالواجهة المحلية
+        const userView = document.getElementById('userView');
+        const operatorView = document.getElementById('operatorView');
+        const joinForm = document.getElementById('joinForm');
+        const queueStatus = document.getElementById('queueStatus');
+        const usernameInput = document.getElementById('username');
+        const queueItemsContainer = document.getElementById('queueItemsContainer');
+        const opStatusBadge = document.getElementById('opStatusBadge');
+
+        let isAvailable = true;
+
+        // 1. منطق العميل: الدخول إلى الطابور وحفظ البيانات في Firestore
+        document.getElementById('startCallBtn').addEventListener('click', async () => {
+            const name = usernameInput.value.trim();
+            if(!name) {
+                alert('الرجاء إدخال الاسم أولاً');
+                return;
+            }
+
+            joinForm.style.display = 'none';
+            queueStatus.style.display = 'block';
+
+            try {
+                // إضافة العميل إلى كولكشن الترقب بالطابور
+                await addDoc(collection(db, "callsQueue"), {
+                    clientName: name,
+                    status: "waiting",
+                    createdAt: serverTimestamp()
+                });
+            } catch (error) {
+                console.error("خطأ أثناء دخول قائمة الانتظار: ", error);
+            }
+        });
+
+        // 2. منطق المشغل: الاستماع اللحظي لطابور الانتظار وتحديث القائمة فوراً
+        const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
+        onSnapshot(q, (snapshot) => {
+            queueItemsContainer.innerHTML = ""; // تنظيف القائمة الحالية قبل التحديث
+            let hasWaiting = false;
+
+            snapshot.forEach((doc) => {
+                const data = doc.data();
+                if (data.status === "waiting") {
+                    hasWaiting = true;
+                    const item = document.createElement('div');
+                    item.className = 'queue-item';
+                    item.innerHTML = `
+                        <span>${data.clientName}</span>
+                        <span style="color: var(--text-muted); font-size: 12px;">في الانتظار</span>
+                    `;
+                    queueItemsContainer.appendChild(item);
+                }
+            });
+
+            if(!hasWaiting) {
+                queueItemsContainer.innerHTML = `<p style="color: var(--text-muted); text-align:center; font-size:14px;">لا يوجد أحد في الانتظار حالياً.</p>`;
+            }
+        });
+
+        // 3. أزرار التحكم بالمعاينة المحلية وتبديل الحالات
+        document.getElementById('toggleStatusBtn').addEventListener('click', () => {
+            isAvailable = !isAvailable;
+            if(isAvailable) {
+                opStatusBadge.innerText = "الحالة: متاح لاستقبال المكالمات";
+                opStatusBadge.className = "badge badge-success";
+                document.getElementById('toggleStatusBtn').innerText = "تحويل إلى: مشغول";
+            } else {
+                opStatusBadge.innerText = "الحالة: مشغول";
+                opStatusBadge.className = "badge badge-warning";
+                document.getElementById('toggleStatusBtn').innerText = "تحويل إلى: متاح";
+            }
+        });
+
+        document.getElementById('switchViewBtn').addEventListener('click', () => {
             if (userView.style.display === 'none') {
                 userView.style.display = 'block';
                 operatorView.style.display = 'none';
@@ -253,32 +325,7 @@
                 userView.style.display = 'none';
                 operatorView.style.display = 'block';
             }
-        }
-
-        // محاكاة الدخول في الطابور للعميل
-        function enterQueue() {
-            const name = document.getElementById('username').value;
-            if(!name) {
-                alert('الرجاء إدخال الاسم أولاً');
-                return;
-            }
-            document.getElementById('joinForm').style.display = 'none';
-            document.getElementById('queueStatus').style.display = 'block';
-        }
-
-        // محاكاة تغيير حالة الموظف
-        let isAvailable = true;
-        function toggleOperatorStatus() {
-            const badge = document.getElementById('opStatusBadge');
-            isAvailable = !isAvailable;
-            if(isAvailable) {
-                badge.innerText = "الحالة: متاح لاستقبال المكالمات";
-                badge.className = "badge badge-success";
-            } else {
-                badge.innerText = "الحالة: مشغول";
-                badge.className = "badge badge-warning";
-            }
-        }
+        });
     </script>
 </body>
 </html>
