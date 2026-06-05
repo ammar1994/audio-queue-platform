@@ -190,7 +190,6 @@
             border: 1px solid #334155;
         }
 
-        /* عناصر الصوت المخفية */
         audio {
             display: none;
         }
@@ -198,10 +197,9 @@
 </head>
 <body>
 
-    <!-- عناصر الصوت المطلوبة لاستقبال البث الصوتي الفعلي -->
     <audio id="remoteAudio" autoplay controls></audio>
 
-    <!-- واجهة العميل (User View) -->
+    <!-- واجهة العميل -->
     <div class="container" id="userView">
         <h1>اتصال صوتي مباشر</h1>
         <p class="subtitle">تواصل مع الدعم الفني فوراً عبر المتصفح</p>
@@ -222,7 +220,7 @@
         </div>
     </div>
 
-    <!-- واجهة المشغّل (Operator View) -->
+    <!-- واجهة المشغّل -->
     <div class="container operator-view" id="operatorView">
         <h1>لوحة تحكم المشغّل</h1>
         <p class="subtitle">إدارة المكالمات وقوائم الانتظار اللحظية</p>
@@ -238,12 +236,9 @@
 
         <div class="queue-list">
             <label>المستخدمين في قائمة الانتظار حالياً:</label>
-            <div id="queueItemsContainer">
-                <!-- يتم حقن المنتظرين تلقائياً هنا عبر Firebase -->
-            </div>
+            <div id="queueItemsContainer"></div>
         </div>
 
-        <!-- نافذة المكالمة الحالية للمشغل -->
         <div class="status-box" id="activeCallBox" style="border-color: var(--success); background-color: rgba(16, 185, 129, 0.1);">
             <h3 style="color: var(--success);">مكالمة جارية الآن...</h3>
             <p id="activeClientName" style="margin-top: 5px; font-weight: 600;"></p>
@@ -253,11 +248,11 @@
 
     <button class="view-switcher" id="switchViewBtn">تبديل العرض للمعاينة</button>
 
-    <!-- تضمين مكتبات Firebase الرسمية عبر CDN كـ Modules -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
+        // إعدادات Firebase لربط مشروعك
         const firebaseConfig = {
             apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
             authDomain: "audio-queue-platform.firebaseapp.com",
@@ -270,7 +265,6 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // خوادم الـ STUN المجانية من جوجل لتسهيل اتصالات WebRTC وتجاوز الـ NAT
         const rtcConfig = {
             iceServers: [
                 { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
@@ -281,6 +275,7 @@
         let peerConnection = null;
         let currentCallDocId = null;
         let isAvailable = true;
+        let clientUnsubscribe = null;
 
         const userView = document.getElementById('userView');
         const operatorView = document.getElementById('operatorView');
@@ -295,21 +290,20 @@
         const activeClientName = document.getElementById('activeClientName');
         const remoteAudio = document.getElementById('remoteAudio');
 
-        // تهيئة اتصال الـ WebRTC وتجهيز الميكروفون
         async function setupWebRTC() {
-            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            peerConnection = new RTCPeerConnection(rtcConfig);
-            
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-
-            peerConnection.ontrack = (event) => {
-                remoteAudio.srcObject = event.streams[0];
-            };
+            if (!localStream) {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            }
+            if (!peerConnection) {
+                peerConnection = new RTCPeerConnection(rtcConfig);
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                peerConnection.ontrack = (event) => {
+                    remoteAudio.srcObject = event.streams[0];
+                };
+            }
         }
 
-        // منطق العميل: طلب مكالمة والدخول بالطابور
+        // تسجيل دخول العميل وانضمامه للطابور
         document.getElementById('startCallBtn').addEventListener('click', async () => {
             const name = usernameInput.value.trim();
             if(!name) {
@@ -329,10 +323,18 @@
                 });
                 currentCallDocId = callDocRef.id;
 
-                // الاستماع لتحديثات هذه المكالمة (هل قبلها المشغل؟)
-                onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
+                peerConnection.onicecandidate = async (event) => {
+                    if (event.candidate) {
+                        await updateDoc(doc(db, "callsQueue", currentCallDocId), { clientCandidate: event.candidate.toJSON() });
+                    }
+                };
+
+                // مراقبة التغييرات اللحظية من قاعدة البيانات للعميل
+                clientUnsubscribe = onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
                     const data = snapshot.data();
-                    if(data && data.status === "active" && data.offer) {
+                    if (!data) return;
+
+                    if(data.status === "active" && data.offer) {
                         queueText.innerText = "أنت في مكالمة مباشرة الآن";
                         queueSubtext.innerText = "جاري التحدث مع الموظف الفني...";
                         document.getElementById('endCallClientBtn').style.display = 'block';
@@ -344,7 +346,14 @@
                             await updateDoc(doc(db, "callsQueue", currentCallDocId), { answer: { type: answer.type, sdp: answer.sdp } });
                         }
                     }
-                    if(data && data.status === "ended") {
+                    
+                    if (data.opCandidate && peerConnection.currentRemoteDescription) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(data.opCandidate));
+                        } catch(e) { console.error(e); }
+                    }
+
+                    if(data.status === "ended") {
                         handleCallTermination();
                     }
                 });
@@ -355,7 +364,7 @@
             }
         });
 
-        // منطق المشغل: إدارة الطوابير والرد اللحظي على العميل
+        // مراقبة المشغّل لطابور الانتظار
         const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
         onSnapshot(q, (snapshot) => {
             queueItemsContainer.innerHTML = "";
@@ -384,15 +393,14 @@
             }
         });
 
-        // دالة رد المشغل وإنشاء الـ WebRTC Offer للعميل
+        // استجابة المشغّل وتحديث البيانات والواجهات تلقائياً
         async function answerCall(id, clientName) {
             currentCallDocId = id;
             await setupWebRTC();
             
-            // جمع الـ ICE Candidates وإرسالها
             peerConnection.onicecandidate = async (event) => {
                 if (event.candidate) {
-                    await updateDoc(doc(db, "callsQueue", currentCallDocId), { offerCandidate: event.candidate.toJSON() });
+                    await updateDoc(doc(db, "callsQueue", currentCallDocId), { opCandidate: event.candidate.toJSON() });
                 }
             };
 
@@ -407,19 +415,24 @@
             activeClientName.innerText = `العميل: ${clientName}`;
             activeCallBox.style.display = "block";
 
-            // الاستماع للـ Answer القادم من العميل لإغلاق الدائرة الصوتية
-            onSnapshot(doc(db, "callsQueue", currentCallDocId), (snapshot) => {
+            onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
                 const data = snapshot.data();
-                if(data && data.answer && !peerConnection.currentRemoteDescription) {
-                    peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                if (!data) return;
+
+                if(data.answer && !peerConnection.currentRemoteDescription) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
                 }
-                if(data && data.status === "ended") {
+                if (data.clientCandidate && peerConnection.currentRemoteDescription) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.clientCandidate));
+                    } catch(e) { console.error(e); }
+                }
+                if(data.status === "ended") {
                     handleCallTermination();
                 }
             });
         }
 
-        // دالة إنهاء وإغلاق المكالمة وتصفية الـ Streams
         async function terminateCall() {
             if(currentCallDocId) {
                 await updateDoc(doc(db, "callsQueue", currentCallDocId), { status: "ended" });
@@ -428,11 +441,17 @@
         }
 
         function handleCallTermination() {
+            if (clientUnsubscribe) {
+                clientUnsubscribe();
+                clientUnsubscribe = null;
+            }
             if (peerConnection) {
                 peerConnection.close();
+                peerConnection = null;
             }
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
             activeCallBox.style.display = "none";
             joinForm.style.display = 'block';
@@ -445,7 +464,6 @@
         document.getElementById('endCallOpBtn').addEventListener('click', terminateCall);
         document.getElementById('endCallClientBtn').addEventListener('click', terminateCall);
 
-        // أزرار التحكم بالواجهات للمعاينة
         document.getElementById('toggleStatusBtn').addEventListener('click', () => {
             isAvailable = !isAvailable;
             if(isAvailable) {
@@ -459,6 +477,7 @@
             }
         });
 
+        // زر تبديل العرض للمعاينة للتنقل بين الواجهتين بسلاسة
         document.getElementById('switchViewBtn').addEventListener('click', () => {
             if (userView.style.display === 'none') {
                 userView.style.display = 'block';
