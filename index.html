@@ -95,6 +95,7 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
+            margin-top: 5px;
         }
 
         .btn-primary {
@@ -104,6 +105,17 @@
 
         .btn-primary:hover {
             background-color: var(--primary-hover);
+        }
+
+        .btn-success {
+            background-color: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background-color: var(--danger);
+            color: white;
+            margin-top: 15px;
         }
 
         .status-box {
@@ -177,9 +189,17 @@
             align-items: center;
             border: 1px solid #334155;
         }
+
+        /* عناصر الصوت المخفية */
+        audio {
+            display: none;
+        }
     </style>
 </head>
 <body>
+
+    <!-- عناصر الصوت المطلوبة لاستقبال البث الصوتي الفعلي -->
+    <audio id="remoteAudio" autoplay controls></audio>
 
     <!-- واجهة العميل (User View) -->
     <div class="container" id="userView">
@@ -196,8 +216,9 @@
 
         <div class="status-box" id="queueStatus">
             <div class="pulse-loader"></div>
-            <h3>أنت في قائمة الانتظار...</h3>
-            <p style="color: var(--text-muted); margin-top: 10px;">يرجى الانتظار، سيتم تحويلك تلقائياً فور تفرغ المشغّل.</p>
+            <h3 id="queueText">أنت في قائمة الانتظار...</h3>
+            <p style="color: var(--text-muted); margin-top: 10px;" id="queueSubtext">يرجى الانتظار، سيتم تحويلك تلقائياً فور تفرغ المشغّل.</p>
+            <button class="btn btn-danger" id="endCallClientBtn" style="display: none;">إنهاء المكالمة</button>
         </div>
     </div>
 
@@ -216,10 +237,17 @@
         </div>
 
         <div class="queue-list">
-            <label>المخدمين في قائمة الانتظار حالياً:</label>
+            <label>المستخدمين في قائمة الانتظار حالياً:</label>
             <div id="queueItemsContainer">
                 <!-- يتم حقن المنتظرين تلقائياً هنا عبر Firebase -->
             </div>
+        </div>
+
+        <!-- نافذة المكالمة الحالية للمشغل -->
+        <div class="status-box" id="activeCallBox" style="border-color: var(--success); background-color: rgba(16, 185, 129, 0.1);">
+            <h3 style="color: var(--success);">مكالمة جارية الآن...</h3>
+            <p id="activeClientName" style="margin-top: 5px; font-weight: 600;"></p>
+            <button class="btn btn-danger" id="endCallOpBtn">إنهاء المكالمة الحالية</button>
         </div>
     </div>
 
@@ -228,9 +256,8 @@
     <!-- تضمين مكتبات Firebase الرسمية عبر CDN كـ Modules -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // تكوين Firebase الافتراضي للمشروع - سيعمل بشكل مباشر كبيئة تجريبية مفتوحة
         const firebaseConfig = {
             apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
             authDomain: "audio-queue-platform.firebaseapp.com",
@@ -240,22 +267,49 @@
             appId: "1:1234567890:web:abcdef123456"
         };
 
-        // تهيئة التطبيق وقاعدة البيانات
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // متغيرات التحكم بالواجهة المحلية
+        // خوادم الـ STUN المجانية من جوجل لتسهيل اتصالات WebRTC وتجاوز الـ NAT
+        const rtcConfig = {
+            iceServers: [
+                { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+            ]
+        };
+
+        let localStream = null;
+        let peerConnection = null;
+        let currentCallDocId = null;
+        let isAvailable = true;
+
         const userView = document.getElementById('userView');
         const operatorView = document.getElementById('operatorView');
         const joinForm = document.getElementById('joinForm');
         const queueStatus = document.getElementById('queueStatus');
+        const queueText = document.getElementById('queueText');
+        const queueSubtext = document.getElementById('queueSubtext');
         const usernameInput = document.getElementById('username');
         const queueItemsContainer = document.getElementById('queueItemsContainer');
         const opStatusBadge = document.getElementById('opStatusBadge');
+        const activeCallBox = document.getElementById('activeCallBox');
+        const activeClientName = document.getElementById('activeClientName');
+        const remoteAudio = document.getElementById('remoteAudio');
 
-        let isAvailable = true;
+        // تهيئة اتصال الـ WebRTC وتجهيز الميكروفون
+        async function setupWebRTC() {
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            peerConnection = new RTCPeerConnection(rtcConfig);
+            
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
 
-        // 1. منطق العميل: الدخول إلى الطابور وحفظ البيانات في Firestore
+            peerConnection.ontrack = (event) => {
+                remoteAudio.srcObject = event.streams[0];
+            };
+        }
+
+        // منطق العميل: طلب مكالمة والدخول بالطابور
         document.getElementById('startCallBtn').addEventListener('click', async () => {
             const name = usernameInput.value.trim();
             if(!name) {
@@ -263,38 +317,65 @@
                 return;
             }
 
-            joinForm.style.display = 'none';
-            queueStatus.style.display = 'block';
-
             try {
-                // إضافة العميل إلى كولكشن الترقب بالطابور
-                await addDoc(collection(db, "callsQueue"), {
+                await setupWebRTC();
+                joinForm.style.display = 'none';
+                queueStatus.style.display = 'block';
+
+                const callDocRef = await addDoc(collection(db, "callsQueue"), {
                     clientName: name,
                     status: "waiting",
                     createdAt: serverTimestamp()
                 });
-            } catch (error) {
-                console.error("خطأ أثناء دخول قائمة الانتظار: ", error);
+                currentCallDocId = callDocRef.id;
+
+                // الاستماع لتحديثات هذه المكالمة (هل قبلها المشغل؟)
+                onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
+                    const data = snapshot.data();
+                    if(data && data.status === "active" && data.offer) {
+                        queueText.innerText = "أنت في مكالمة مباشرة الآن";
+                        queueSubtext.innerText = "جاري التحدث مع الموظف الفني...";
+                        document.getElementById('endCallClientBtn').style.display = 'block';
+
+                        if (!peerConnection.currentRemoteDescription) {
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                            const answer = await peerConnection.createAnswer();
+                            await peerConnection.setLocalDescription(answer);
+                            await updateDoc(doc(db, "callsQueue", currentCallDocId), { answer: { type: answer.type, sdp: answer.sdp } });
+                        }
+                    }
+                    if(data && data.status === "ended") {
+                        handleCallTermination();
+                    }
+                });
+
+            } catch (err) {
+                alert("يرجى تفعيل صلاحية الميكروفون للتمكن من الاتصال.");
+                console.error(err);
             }
         });
 
-        // 2. منطق المشغل: الاستماع اللحظي لطابور الانتظار وتحديث القائمة فوراً
+        // منطق المشغل: إدارة الطوابير والرد اللحظي على العميل
         const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
         onSnapshot(q, (snapshot) => {
-            queueItemsContainer.innerHTML = ""; // تنظيف القائمة الحالية قبل التحديث
+            queueItemsContainer.innerHTML = "";
             let hasWaiting = false;
 
-            snapshot.forEach((doc) => {
-                const data = doc.data();
+            snapshot.forEach((docSnapshot) => {
+                const data = docSnapshot.data();
                 if (data.status === "waiting") {
                     hasWaiting = true;
                     const item = document.createElement('div');
                     item.className = 'queue-item';
                     item.innerHTML = `
                         <span>${data.clientName}</span>
-                        <span style="color: var(--text-muted); font-size: 12px;">في الانتظار</span>
+                        <button class="btn btn-success" style="width:auto; padding:5px 15px; font-size:12px;" id="answer-${docSnapshot.id}">رد</button>
                     `;
                     queueItemsContainer.appendChild(item);
+
+                    document.getElementById(`answer-${docSnapshot.id}`).addEventListener('click', () => {
+                        answerCall(docSnapshot.id, data.clientName);
+                    });
                 }
             });
 
@@ -303,7 +384,68 @@
             }
         });
 
-        // 3. أزرار التحكم بالمعاينة المحلية وتبديل الحالات
+        // دالة رد المشغل وإنشاء الـ WebRTC Offer للعميل
+        async function answerCall(id, clientName) {
+            currentCallDocId = id;
+            await setupWebRTC();
+            
+            // جمع الـ ICE Candidates وإرسالها
+            peerConnection.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    await updateDoc(doc(db, "callsQueue", currentCallDocId), { offerCandidate: event.candidate.toJSON() });
+                }
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            await updateDoc(doc(db, "callsQueue", currentCallDocId), {
+                status: "active",
+                offer: { type: offer.type, sdp: offer.sdp }
+            });
+
+            activeClientName.innerText = `العميل: ${clientName}`;
+            activeCallBox.style.display = "block";
+
+            // الاستماع للـ Answer القادم من العميل لإغلاق الدائرة الصوتية
+            onSnapshot(doc(db, "callsQueue", currentCallDocId), (snapshot) => {
+                const data = snapshot.data();
+                if(data && data.answer && !peerConnection.currentRemoteDescription) {
+                    peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                }
+                if(data && data.status === "ended") {
+                    handleCallTermination();
+                }
+            });
+        }
+
+        // دالة إنهاء وإغلاق المكالمة وتصفية الـ Streams
+        async function terminateCall() {
+            if(currentCallDocId) {
+                await updateDoc(doc(db, "callsQueue", currentCallDocId), { status: "ended" });
+            }
+            handleCallTermination();
+        }
+
+        function handleCallTermination() {
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            activeCallBox.style.display = "none";
+            joinForm.style.display = 'block';
+            queueStatus.style.display = 'none';
+            document.getElementById('endCallClientBtn').style.display = 'none';
+            queueText.innerText = "أنت في قائمة الانتظار...";
+            queueSubtext.innerText = "يرجى الانتظار، سيتم تحويلك تلقائياً فور تفرغ المشغّل.";
+        }
+
+        document.getElementById('endCallOpBtn').addEventListener('click', terminateCall);
+        document.getElementById('endCallClientBtn').addEventListener('click', terminateCall);
+
+        // أزرار التحكم بالواجهات للمعاينة
         document.getElementById('toggleStatusBtn').addEventListener('click', () => {
             isAvailable = !isAvailable;
             if(isAvailable) {
