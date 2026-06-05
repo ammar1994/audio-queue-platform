@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحكم المشغّل - سري</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --card-dark: #1e293b;
+            --primary: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Cairo', sans-serif; }
+        body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .container { width: 100%; max-width: 480px; background-color: var(--card-dark); border-radius: 16px; padding: 30px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); border: 1px solid #334155; text-align: center; }
+        h1 { font-size: 24px; margin-bottom: 10px; font-weight: 700; }
+        p.subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 30px; }
+        .btn { width: 100%; padding: 12px; border-radius: 8px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn-success { background-color: var(--success); color: white; }
+        .btn-danger { background-color: var(--danger); color: white; margin-top: 15px; }
+        .status-box { display: none; margin-top: 20px; padding: 20px; border-radius: 12px; background-color: rgba(16, 185, 129, 0.1); border: 1px solid var(--success); }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 15px; }
+        .badge-success { background-color: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .queue-list { text-align: right; margin-top: 20px; max-height: 250px; overflow-y: auto; }
+        .queue-item { background-color: var(--bg-dark); padding: 12px; border-radius: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #334155; }
+        audio { display: none; }
+    </style>
+</head>
+<body>
+
+    <audio id="operatorAudio" autoplay controls></audio>
+
+    <div class="container">
+        <h1>لوحة تحكم المشغّل</h1>
+        <p class="subtitle">إدارة المكالمات وقوائم الانتظار اللحظية</p>
+
+        <div style="margin-bottom: 25px;">
+            <span class="badge badge-success" id="opStatusBadge">الحالة: متاح لاستقبال المكالمات</span>
+        </div>
+
+        <div class="queue-list">
+            <label style="color: var(--text-muted); font-size: 14px;">المستخدمين في قائمة الانتظار حالياً:</label>
+            <div id="queueItemsContainer"></div>
+        </div>
+
+        <div class="status-box" id="activeCallBox">
+            <h3 style="color: var(--success);">مكالمة جارية الآن...</h3>
+            <p id="activeClientName" style="margin-top: 5px; font-weight: 600;"></p>
+            <button class="btn btn-danger" id="endCallOpBtn">إنهاء المكالمة الحالية</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, query, orderBy, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
+            authDomain: "audio-queue-platform.firebaseapp.com",
+            projectId: "audio-queue-platform",
+            storageBucket: "audio-queue-platform.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:abcdef123456"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const rtcConfig = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
+
+        let opStream = null;
+        let opPeer = null;
+        let opCallId = null;
+        let opUnsub = null;
+
+        const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
+        onSnapshot(q, (snapshot) => {
+            const container = document.getElementById('queueItemsContainer');
+            container.innerHTML = "";
+            let hasWaiting = false;
+
+            snapshot.forEach((docSnapshot) => {
+                const data = docSnapshot.data();
+                if (data.status === "waiting") {
+                    hasWaiting = true;
+                    const item = document.createElement('div');
+                    item.className = 'queue-item';
+                    item.innerHTML = `
+                        <span>${data.clientName}</span>
+                        <button class="btn btn-success" style="width:auto; padding:5px 15px; font-size:12px;" id="answer-${docSnapshot.id}">رد</button>
+                    `;
+                    container.appendChild(item);
+
+                    document.getElementById(`answer-${docSnapshot.id}`).addEventListener('click', () => {
+                        answerCall(docSnapshot.id, data.clientName);
+                    });
+                }
+            });
+
+            if(!hasWaiting) {
+                container.innerHTML = `<p style="color: var(--text-muted); text-align:center; font-size:14px;">لا يوجد أحد في الانتظار حالياً.</p>`;
+            }
+        });
+
+        async function answerCall(id, clientName) {
+            opCallId = id;
+            try {
+                opStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                opPeer = new RTCPeerConnection(rtcConfig);
+
+                opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
+                opPeer.ontrack = (e) => { document.getElementById('operatorAudio').srcObject = e.streams[0]; };
+
+                opPeer.onicecandidate = async (e) => {
+                    if (e.candidate && opCallId) {
+                        await updateDoc(doc(db, "callsQueue", opCallId), { opCandidate: e.candidate.toJSON() });
+                    }
+                };
+
+                const offer = await opPeer.createOffer();
+                await opPeer.setLocalDescription(offer);
+
+                await updateDoc(doc(db, "callsQueue", opCallId), {
+                    status: "active",
+                    offer: { type: offer.type, sdp: offer.sdp }
+                });
+
+                document.getElementById('activeClientName').innerText = `العميل: ${clientName}`;
+                document.getElementById('activeCallBox').style.display = "block";
+
+                opUnsub = onSnapshot(doc(db, "callsQueue", opCallId), async (snapshot) => {
+                    const data = snapshot.data();
+                    if (!data) return;
+
+                    if(data.answer && !opPeer.currentRemoteDescription) {
+                        await opPeer.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    }
+                    if (data.clientCandidate && opPeer.currentRemoteDescription) {
+                        try { await opPeer.addIceCandidate(new RTCIceCandidate(data.clientCandidate)); } catch(err) {}
+                    }
+                    if(data.status === "ended") { resetOperatorUI(); }
+                });
+            } catch(e) { alert("فشل في الوصول للميكروفون للمشغل."); }
+        }
+
+        async function opTerminate() {
+            if(opCallId) { await updateDoc(doc(db, "callsQueue", opCallId), { status: "ended" }); }
+            resetOperatorUI();
+        }
+
+        function resetOperatorUI() {
+            if (opUnsub) { opUnsub(); opUnsub = null; }
+            if (opPeer) { opPeer.close(); opPeer = null; }
+            if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
+            opCallId = null;
+            document.getElementById('activeCallBox').style.display = "none";
+        }
+
+        document.getElementById('endCallOpBtn').addEventListener('click', opTerminate);
+    </script>
+</body>
+</html>
