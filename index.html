@@ -197,9 +197,9 @@
 </head>
 <body>
 
-    <audio id="remoteAudio" autoplay controls></audio>
+    <audio id="clientAudio" autoplay controls></audio>
+    <audio id="operatorAudio" autoplay controls></audio>
 
-    <!-- واجهة العميل -->
     <div class="container" id="userView">
         <h1>اتصال صوتي مباشر</h1>
         <p class="subtitle">تواصل مع الدعم الفني فوراً عبر المتصفح</p>
@@ -220,7 +220,6 @@
         </div>
     </div>
 
-    <!-- واجهة المشغّل -->
     <div class="container operator-view" id="operatorView">
         <h1>لوحة تحكم المشغّل</h1>
         <p class="subtitle">إدارة المكالمات وقوائم الانتظار اللحظية</p>
@@ -252,7 +251,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // إعدادات Firebase لربط مشروعك
+        // إعدادات Firebase الخاصة بمشروعك
         const firebaseConfig = {
             apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
             authDomain: "audio-queue-platform.firebaseapp.com",
@@ -266,16 +265,21 @@
         const db = getFirestore(app);
 
         const rtcConfig = {
-            iceServers: [
-                { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
-            ]
+            iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }]
         };
 
-        let localStream = null;
-        let peerConnection = null;
-        let currentCallDocId = null;
+        // فصل كامل للمتغيرات بين العميل والمشغل لمنع التعارض الانهياري عند التشغيل على نفس الجوال
+        let clientStream = null;
+        let clientPeer = null;
+        let clientCallId = null;
+        let clientUnsub = null;
+
+        let opStream = null;
+        let opPeer = null;
+        let opCallId = null;
+        let opUnsub = null;
+
         let isAvailable = true;
-        let clientUnsubscribe = null;
 
         const userView = document.getElementById('userView');
         const operatorView = document.getElementById('operatorView');
@@ -288,83 +292,65 @@
         const opStatusBadge = document.getElementById('opStatusBadge');
         const activeCallBox = document.getElementById('activeCallBox');
         const activeClientName = document.getElementById('activeClientName');
-        const remoteAudio = document.getElementById('remoteAudio');
 
-        async function setupWebRTC() {
-            if (!localStream) {
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            }
-            if (!peerConnection) {
-                peerConnection = new RTCPeerConnection(rtcConfig);
-                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-                peerConnection.ontrack = (event) => {
-                    remoteAudio.srcObject = event.streams[0];
-                };
-            }
-        }
-
-        // تسجيل دخول العميل وانضمامه للطابور
+        // [1] منطق العميل بالكامل
         document.getElementById('startCallBtn').addEventListener('click', async () => {
             const name = usernameInput.value.trim();
-            if(!name) {
-                alert('الرجاء إدخال الاسم أولاً');
-                return;
-            }
+            if(!name) { alert('الرجاء إدخال الاسم أولاً'); return; }
 
             try {
-                await setupWebRTC();
                 joinForm.style.display = 'none';
                 queueStatus.style.display = 'block';
 
-                const callDocRef = await addDoc(collection(db, "callsQueue"), {
+                clientStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                clientPeer = new RTCPeerConnection(rtcConfig);
+                
+                clientStream.getTracks().forEach(track => clientPeer.addTrack(track, clientStream));
+                clientPeer.ontrack = (e) => { document.getElementById('clientAudio').srcObject = e.streams[0]; };
+
+                const docRef = await addDoc(collection(db, "callsQueue"), {
                     clientName: name,
                     status: "waiting",
                     createdAt: serverTimestamp()
                 });
-                currentCallDocId = callDocRef.id;
+                clientCallId = docRef.id;
 
-                peerConnection.onicecandidate = async (event) => {
-                    if (event.candidate) {
-                        await updateDoc(doc(db, "callsQueue", currentCallDocId), { clientCandidate: event.candidate.toJSON() });
+                clientPeer.onicecandidate = async (e) => {
+                    if (e.candidate && clientCallId) {
+                        await updateDoc(doc(db, "callsQueue", clientCallId), { clientCandidate: e.candidate.toJSON() });
                     }
                 };
 
-                // مراقبة التغييرات اللحظية من قاعدة البيانات للعميل
-                clientUnsubscribe = onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
+                clientUnsub = onSnapshot(doc(db, "callsQueue", clientCallId), async (snapshot) => {
                     const data = snapshot.data();
                     if (!data) return;
 
-                    if(data.status === "active" && data.offer) {
+                    if(data.status === "active" && data.offer && !clientPeer.currentRemoteDescription) {
                         queueText.innerText = "أنت في مكالمة مباشرة الآن";
                         queueSubtext.innerText = "جاري التحدث مع الموظف الفني...";
                         document.getElementById('endCallClientBtn').style.display = 'block';
 
-                        if (!peerConnection.currentRemoteDescription) {
-                            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-                            const answer = await peerConnection.createAnswer();
-                            await peerConnection.setLocalDescription(answer);
-                            await updateDoc(doc(db, "callsQueue", currentCallDocId), { answer: { type: answer.type, sdp: answer.sdp } });
-                        }
+                        await clientPeer.setRemoteDescription(new RTCSessionDescription(data.offer));
+                        const answer = await clientPeer.createAnswer();
+                        await clientPeer.setLocalDescription(answer);
+                        await updateDoc(doc(db, "callsQueue", clientCallId), { answer: { type: answer.type, sdp: answer.sdp } });
                     }
                     
-                    if (data.opCandidate && peerConnection.currentRemoteDescription) {
-                        try {
-                            await peerConnection.addIceCandidate(new RTCIceCandidate(data.opCandidate));
-                        } catch(e) { console.error(e); }
+                    if (data.opCandidate && clientPeer.currentRemoteDescription) {
+                        try { await clientPeer.addIceCandidate(new RTCIceCandidate(data.opCandidate)); } catch(err) {}
                     }
 
-                    if(data.status === "ended") {
-                        handleCallTermination();
-                    }
+                    if(data.status === "ended") { resetClientUI(); }
                 });
 
             } catch (err) {
-                alert("يرجى تفعيل صلاحية الميكروفون للتمكن من الاتصال.");
-                console.error(err);
+                alert("يرجى تفعيل صلاحية الميكروفون.");
+                joinForm.style.display = 'block';
+                queueStatus.style.display = 'none';
             }
         });
 
-        // مراقبة المشغّل لطابور الانتظار
+        // [2] لوحة تحكم المشغل وتحديث الطابور
         const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
         onSnapshot(q, (snapshot) => {
             queueItemsContainer.innerHTML = "";
@@ -393,76 +379,84 @@
             }
         });
 
-        // استجابة المشغّل وتحديث البيانات والواجهات تلقائياً
+        // استجابة المشغل للمكالمة بشكل مستقل
         async function answerCall(id, clientName) {
-            currentCallDocId = id;
-            await setupWebRTC();
-            
-            peerConnection.onicecandidate = async (event) => {
-                if (event.candidate) {
-                    await updateDoc(doc(db, "callsQueue", currentCallDocId), { opCandidate: event.candidate.toJSON() });
-                }
-            };
+            opCallId = id;
+            try {
+                opStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                opPeer = new RTCPeerConnection(rtcConfig);
 
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
+                opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
+                opPeer.ontrack = (e) => { document.getElementById('operatorAudio').srcObject = e.streams[0]; };
 
-            await updateDoc(doc(db, "callsQueue", currentCallDocId), {
-                status: "active",
-                offer: { type: offer.type, sdp: offer.sdp }
-            });
+                opPeer.onicecandidate = async (e) => {
+                    if (e.candidate && opCallId) {
+                        await updateDoc(doc(db, "callsQueue", opCallId), { opCandidate: e.candidate.toJSON() });
+                    }
+                };
 
-            activeClientName.innerText = `العميل: ${clientName}`;
-            activeCallBox.style.display = "block";
+                const offer = await opPeer.createOffer();
+                await opPeer.setLocalDescription(offer);
 
-            onSnapshot(doc(db, "callsQueue", currentCallDocId), async (snapshot) => {
-                const data = snapshot.data();
-                if (!data) return;
+                await updateDoc(doc(db, "callsQueue", opCallId), {
+                    status: "active",
+                    offer: { type: offer.type, sdp: offer.sdp }
+                });
 
-                if(data.answer && !peerConnection.currentRemoteDescription) {
-                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-                }
-                if (data.clientCandidate && peerConnection.currentRemoteDescription) {
-                    try {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.clientCandidate));
-                    } catch(e) { console.error(e); }
-                }
-                if(data.status === "ended") {
-                    handleCallTermination();
-                }
-            });
+                activeClientName.innerText = `العميل: ${clientName}`;
+                activeCallBox.style.display = "block";
+
+                opUnsub = onSnapshot(doc(db, "callsQueue", opCallId), async (snapshot) => {
+                    const data = snapshot.data();
+                    if (!data) return;
+
+                    if(data.answer && !opPeer.currentRemoteDescription) {
+                        await opPeer.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    }
+                    if (data.clientCandidate && opPeer.currentRemoteDescription) {
+                        try { await opPeer.addIceCandidate(new RTCIceCandidate(data.clientCandidate)); } catch(err) {}
+                    }
+                    if(data.status === "ended") { resetOperatorUI(); }
+                });
+            } catch(e) { alert("فشل في الوصول للميكروفون للمشغل."); }
         }
 
-        async function terminateCall() {
-            if(currentCallDocId) {
-                await updateDoc(doc(db, "callsQueue", currentCallDocId), { status: "ended" });
+        // [3] دوال إنهاء المكالمة الذكية لمنع الانهيار التبادلي
+        async function clientTerminate() {
+            if(clientCallId) {
+                await updateDoc(doc(db, "callsQueue", clientCallId), { status: "ended" });
             }
-            handleCallTermination();
+            resetClientUI();
         }
 
-        function handleCallTermination() {
-            if (clientUnsubscribe) {
-                clientUnsubscribe();
-                clientUnsubscribe = null;
+        async function opTerminate() {
+            if(opCallId) {
+                await updateDoc(doc(db, "callsQueue", opCallId), { status: "ended" });
             }
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
-            activeCallBox.style.display = "none";
+            resetOperatorUI();
+        }
+
+        function resetClientUI() {
+            if (clientUnsub) { clientUnsub(); clientUnsub = null; }
+            if (clientPeer) { clientPeer.close(); clientPeer = null; }
+            if (clientStream) { clientStream.getTracks().forEach(t => t.stop()); clientStream = null; }
+            clientCallId = null;
             joinForm.style.display = 'block';
             queueStatus.style.display = 'none';
             document.getElementById('endCallClientBtn').style.display = 'none';
             queueText.innerText = "أنت في قائمة الانتظار...";
-            queueSubtext.innerText = "يرجى الانتظار، سيتم تحويلك تلقائياً فور تفرغ المشغّل.";
         }
 
-        document.getElementById('endCallOpBtn').addEventListener('click', terminateCall);
-        document.getElementById('endCallClientBtn').addEventListener('click', terminateCall);
+        function resetOperatorUI() {
+            if (opUnsub) { opUnsub(); opUnsub = null; }
+            if (opPeer) { opPeer.close(); opPeer = null; }
+            if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
+            opCallId = null;
+            activeCallBox.style.display = "none";
+        }
+
+        document.getElementById('endCallClientBtn').addEventListener('click', clientTerminate);
+        document.getElementById('endCallOpBtn').addEventListener('click', opTerminate);
 
         document.getElementById('toggleStatusBtn').addEventListener('click', () => {
             isAvailable = !isAvailable;
@@ -477,7 +471,6 @@
             }
         });
 
-        // زر تبديل العرض للمعاينة للتنقل بين الواجهتين بسلاسة
         document.getElementById('switchViewBtn').addEventListener('click', () => {
             if (userView.style.display === 'none') {
                 userView.style.display = 'block';
