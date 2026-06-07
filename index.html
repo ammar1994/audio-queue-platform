@@ -82,7 +82,6 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // خوادم الـ ICE المحدثة بـ خوادم TURN لحل مشكلة عدم انتقال الصوت عبر جدران الحماية للشركات الخلوية
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -90,6 +89,22 @@
                 { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
                 { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
             ]
+        };
+
+        // فلاتر وتيكات لتحسين جودة الصوت لأقصى درجة ممكنة
+        const highQualityAudioConstraints = {
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000, 
+                channelCount: 1,
+                googEchoCancellation: true,
+                googAutoGainControl: true,
+                googNoiseSuppression: true,
+                googHighpassFilter: true
+            },
+            video: false
         };
 
         let clientStream = null;
@@ -105,7 +120,7 @@
                 document.getElementById('joinForm').style.display = 'none';
                 document.getElementById('queueStatus').style.display = 'block';
 
-                clientStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                clientStream = await navigator.mediaDevices.getUserMedia(highQualityAudioConstraints);
                 clientPeer = new RTCPeerConnection(rtcConfig);
                 
                 clientStream.getTracks().forEach(track => clientPeer.addTrack(track, clientStream));
