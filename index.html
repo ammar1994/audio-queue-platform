@@ -81,7 +81,16 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const rtcConfig = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
+
+        // خوادم الـ ICE المحدثة بـ خوادم TURN لحل مشكلة عدم انتقال الصوت عبر جدران الحماية للشركات الخلوية
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
+        };
 
         let clientStream = null;
         let clientPeer = null;
@@ -99,7 +108,6 @@
                 clientStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 clientPeer = new RTCPeerConnection(rtcConfig);
                 
-                // إضافة الميكروفون إلى النفق فوراً
                 clientStream.getTracks().forEach(track => clientPeer.addTrack(track, clientStream));
                 
                 clientPeer.ontrack = (e) => { 
@@ -157,7 +165,6 @@
                     }
                 });
 
-                // الاستماع للـ Candidates القادمة من المدير بشكل فوري
                 const opCandRef = ref(db, `callsQueue/${clientCallId}/opCandidates`);
                 onValue(opCandRef, (snapshot) => {
                     if (snapshot.exists() && clientPeer && clientPeer.currentRemoteDescription) {
