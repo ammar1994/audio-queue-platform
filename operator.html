@@ -2,117 +2,44 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة المشغّل - جودة عالية</title>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <title>اتصال مباشر</title>
     <style>
-        :root { --bg-dark: #0f172a; --card-dark: #1e293b; --success: #10b981; --danger: #ef4444; }
-        body { background-color: var(--bg-dark); color: #f8fafc; font-family: 'Cairo', sans-serif; padding: 20px; }
-        .card { background-color: var(--card-dark); border-radius: 12px; padding: 20px; border: 1px solid #334155; margin-bottom: 20px; }
-        .btn { padding: 12px 20px; border-radius: 8px; border: none; font-weight: 600; cursor: pointer; width: 100%; }
-        .btn-success { background-color: var(--success); color: white; }
-        .btn-danger { background-color: var(--danger); color: white; }
-        .audio-wrapper { margin-top: 15px; display: none; }
-        audio { width: 100%; }
+        body { background: #0f172a; color: white; font-family: sans-serif; text-align: center; padding: 50px; }
+        .btn { padding: 20px 40px; background: #2563eb; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 18px; }
     </style>
 </head>
 <body>
-
-    <div class="card" id="activeCallArea" style="display: none;">
-        <h2 id="statusTitle">مكالمة نشطة</h2>
-        <div class="audio-wrapper" id="audioContainerOp" style="display: block;">
-            <audio id="operatorAudio" autoplay playsinline controls></audio>
-        </div>
-        <button class="btn btn-danger" id="endCallOpBtn" style="margin-top: 15px;">إنهاء المكالمة</button>
-    </div>
-
-    <div class="card" id="queueList">
-        <h2>قائمة الانتظار</h2>
-        <ul id="queueContainer"></ul>
-    </div>
+    <button class="btn" id="start">بدء الاتصال</button>
+    <audio id="remoteAudio" autoplay></audio>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, onValue, update, remove, push, set, off } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, push, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        
+        const db = getDatabase(initializeApp({ /* أعد بيانات الـ firebase هنا */ }));
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyCAEQyqtcW26k7yc-vKQMpfQgmWXDPP0yw",
-            authDomain: "audio-queue-53efb.firebaseapp.com",
-            databaseURL: "https://audio-queue-53efb-default-rtdb.firebaseio.com",
-            projectId: "audio-queue-53efb",
-            storageBucket: "audio-queue-53efb.firebasestorage.app",
-            messagingSenderId: "242269512815",
-            appId: "1:242269512815:web:df4055e5bd0a154d87599a",
-            measurementId: "G-GQ3CRV1YHM"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-        const rtcConfig = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
-            ]
-        };
-
-        let opStream, opPeer, currentActiveCallId;
-
-        // إعدادات جودة الصوت الاحترافية (تشبه كود واتساب في المتصفح)
-        const audioConstraints = {
-            audio: {
-                echoCancellation: { exact: true },
-                noiseSuppression: { exact: true },
-                autoGainControl: { exact: true },
-                sampleRate: 48000, // جودة استوديو
-                latency: 0         // أقل تأخير ممكن
-            }
-        };
-
-        async function answerCall(callId, clientName) {
-            currentActiveCallId = callId;
-            opStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
-            opPeer = new RTCPeerConnection(rtcConfig);
+        document.getElementById('start').onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(t => pc.addTrack(t, stream));
             
-            // إضافة مسارات الصوت مع التعديل على الـ Transceiver لفرض ترميز Opus
-            const senders = opStream.getTracks();
-            senders.forEach(track => opPeer.addTrack(track, opStream));
+            const callRef = push(ref(db, "calls"));
+            window.callId = callRef.key;
+            await set(callRef, { status: "waiting" });
 
-            opPeer.ontrack = (e) => {
-                const audioEl = document.getElementById('operatorAudio');
-                audioEl.srcObject = e.streams[0];
-            };
+            pc.onicecandidate = e => { if(e.candidate) push(ref(db, `calls/${window.callId}/clientIce`), e.candidate.toJSON()); };
+            pc.ontrack = e => document.getElementById('remoteAudio').srcObject = e.streams[0];
 
-            opPeer.onicecandidate = e => {
-                if (e.candidate) push(ref(db, `callsQueue/${currentActiveCallId}/opCandidates`), e.candidate.toJSON());
-            };
-
-            const offer = await opPeer.createOffer({ offerToReceiveAudio: true });
-            await opPeer.setLocalDescription(offer);
-            await update(ref(db, `callsQueue/${currentActiveCallId}`), { status: "active", offer: { type: offer.type, sdp: offer.sdp } });
-            
-            document.getElementById('activeCallArea').style.display = 'block';
-        }
-
-        document.getElementById('endCallOpBtn').onclick = () => {
-            update(ref(db, `callsQueue/${currentActiveCallId}`), { status: "ended" });
-            window.location.reload();
+            onValue(ref(db, `calls/${window.callId}`), async (snap) => {
+                const data = snap.val();
+                if(data?.status === "active" && !pc.remoteDescription) {
+                    await pc.setRemoteDescription(data.offer);
+                    const ans = await pc.createAnswer();
+                    await pc.setLocalDescription(ans);
+                    update(ref(db, `calls/${window.callId}`), { answer: ans });
+                }
+            });
         };
-
-        // الكود المتبقي للـ onValue لقائمة الانتظار (كما في السابق)
-        onValue(ref(db, "callsQueue"), (snapshot) => {
-            const data = snapshot.val();
-            const container = document.getElementById('queueContainer');
-            container.innerHTML = "";
-            if(data) {
-                Object.keys(data).forEach(id => {
-                    if(data[id].status === "waiting") {
-                        const li = document.createElement('li');
-                        li.innerHTML = `${data[id].clientName} <button class="btn btn-success" onclick="answerCall('${id}')">رد</button>`;
-                        container.appendChild(li);
-                    }
-                });
-            }
-        });
     </script>
 </body>
 </html>
