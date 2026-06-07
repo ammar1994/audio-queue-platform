@@ -3,33 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة تحكم المشغّل - سري</title>
+    <title>لوحة تحكم المشغّل - نظام الاتصال الصوتي</title>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-dark: #0f172a;
             --card-dark: #1e293b;
             --primary: #2563eb;
+            --primary-hover: #1d4ed8;
             --success: #10b981;
-            --warning: #f59e0b;
             --danger: #ef4444;
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Cairo', sans-serif; }
-        body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .container { width: 100%; max-width: 480px; background-color: var(--card-dark); border-radius: 16px; padding: 30px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); border: 1px solid #334155; text-align: center; }
-        h1 { font-size: 24px; margin-bottom: 10px; font-weight: 700; }
-        p.subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 30px; }
-        .btn { width: 100%; padding: 12px; border-radius: 8px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; padding: 30px; }
+        .dashboard { max-width: 800px; margin: 0 auto; }
+        h1 { font-size: 26px; margin-bottom: 20px; font-weight: 700; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+        .main-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        .card { background-color: var(--card-dark); border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); border: 1px solid #334155; }
+        h2 { font-size: 18px; margin-bottom: 15px; color: var(--text-muted); }
+        .queue-list { list-style: none; }
+        .queue-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background-color: var(--bg-dark); border-radius: 8px; margin-bottom: 10px; border: 1px solid #1e293b; }
+        .client-info { text-align: right; }
+        .client-name { font-weight: 600; font-size: 16px; }
+        .client-time { font-size: 12px; color: var(--text-muted); }
+        .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
         .btn-success { background-color: var(--success); color: white; }
-        .btn-danger { background-color: var(--danger); color: white; margin-top: 15px; }
-        .status-box { display: none; margin-top: 20px; padding: 20px; border-radius: 12px; background-color: rgba(16, 185, 129, 0.1); border: 1px solid var(--success); }
-        .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 15px; }
-        .badge-success { background-color: rgba(16, 185, 129, 0.2); color: var(--success); }
-        .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: var(--warning); }
-        .queue-list { text-align: right; margin-top: 20px; max-height: 250px; overflow-y: auto; }
-        .queue-item { background-color: var(--bg-dark); padding: 12px; border-radius: 8px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #334155; }
+        .btn-success:hover { background-color: #059669; }
+        .btn-danger { background-color: var(--danger); color: white; }
+        .btn-danger:hover { background-color: #dc2626; }
+        .active-call-box { display: none; text-align: center; padding: 30px 10px; background-color: rgba(16, 185, 129, 0.1); border: 2px dashed var(--success); border-radius: 8px; }
+        .active-name { font-size: 22px; font-weight: 700; color: var(--success); margin-bottom: 15px; }
+        .empty-msg { color: var(--text-muted); text-align: center; font-style: italic; padding: 20px 0; }
         audio { display: none; }
     </style>
 </head>
@@ -37,80 +43,104 @@
 
     <audio id="operatorAudio" autoplay controls></audio>
 
-    <div class="container">
-        <h1>لوحة تحكم المشغّل</h1>
-        <p class="subtitle">إدارة المكالمات وقوائم الانتظار اللحظية</p>
+    <div class="dashboard">
+        <h1>لوحة تحكم مشغّل النظام الفني</h1>
+        
+        <div class="main-grid">
+            <div class="card active-call-box" id="activeCallArea">
+                <h2>المكالمة الحالية النشطة</h2>
+                <div class="active-name" id="currentClientName">جاري التحدث مع: ...</div>
+                <button class="btn btn-danger" id="endCallOpBtn">إنهاء المكالمة الحالية</button>
+            </div>
 
-        <div style="margin-bottom: 25px;">
-            <span class="badge badge-success" id="opStatusBadge">الحالة: متاح لاستقبال المكالمات</span>
-        </div>
-
-        <div class="queue-list">
-            <label style="color: var(--text-muted); font-size: 14px;">المستخدمين في قائمة الانتظار حالياً:</label>
-            <div id="queueItemsContainer"></div>
-        </div>
-
-        <div class="status-box" id="activeCallBox">
-            <h3 style="color: var(--success);">مكالمة جارية الآن...</h3>
-            <p id="activeClientName" style="margin-top: 5px; font-weight: 600;"></p>
-            <button class="btn btn-danger" id="endCallOpBtn">إنهاء المكالمة الحالية</button>
+            <div class="card">
+                <h2>قائمة المتصلين في الانتظار</h2>
+                <ul class="queue-list" id="queueContainer">
+                    <li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>
+                </ul>
+            </div>
         </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, onSnapshot, query, orderBy, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getDatabase, ref, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
-            apiKey: "AIzaSyAsX-SAMPLE_KEY_FOR_QUEUE_SYSTEM_BUILT",
-            authDomain: "audio-queue-platform.firebaseapp.com",
-            projectId: "audio-queue-platform",
-            storageBucket: "audio-queue-platform.appspot.com",
-            messagingSenderId: "1234567890",
-            appId: "1:1234567890:web:abcdef123456"
+            apiKey: "AIzaSyCAEQyqtcW26k7yc-vKQMpfQgmWXDPP0yw",
+            authDomain: "audio-queue-53efb.firebaseapp.com",
+            databaseURL: "https://audio-queue-53efb-default-rtdb.firebaseio.com",
+            projectId: "audio-queue-53efb",
+            storageBucket: "audio-queue-53efb.firebasestorage.app",
+            messagingSenderId: "242269512815",
+            appId: "1:242269512815:web:df4055e5bd0a154d87599a",
+            measurementId: "G-GQ3CRV1YHM"
         };
 
         const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
+        const db = getDatabase(app);
         const rtcConfig = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
 
         let opStream = null;
         let opPeer = null;
-        let opCallId = null;
-        let opUnsub = null;
+        let currentActiveCallId = null;
 
-        const q = query(collection(db, "callsQueue"), orderBy("createdAt", "asc"));
-        onSnapshot(q, (snapshot) => {
-            const container = document.getElementById('queueItemsContainer');
+        const queueRef = ref(db, "callsQueue");
+        onValue(queueRef, (snapshot) => {
+            const data = snapshot.val();
+            const container = document.getElementById('queueContainer');
             container.innerHTML = "";
+
+            if (!data) {
+                container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
+                return;
+            }
+
             let hasWaiting = false;
 
-            snapshot.forEach((docSnapshot) => {
-                const data = docSnapshot.data();
-                if (data.status === "waiting") {
+            Object.keys(data).forEach(id => {
+                const call = data[id];
+                
+                if (call.status === "waiting") {
                     hasWaiting = true;
-                    const item = document.createElement('div');
-                    item.className = 'queue-item';
-                    item.innerHTML = `
-                        <span>${data.clientName}</span>
-                        <button class="btn btn-success" style="width:auto; padding:5px 15px; font-size:12px;" id="answer-${docSnapshot.id}">رد</button>
+                    const li = document.createElement('li');
+                    li.className = "queue-item";
+                    li.innerHTML = `
+                        <div class="client-info">
+                            <div class="client-name">${call.clientName}</div>
+                            <div class="client-time">ينتظر الاتصال...</div>
+                        </div>
+                        <button class="btn btn-success" id="btn-${id}">الرد على المكالمة</button>
                     `;
-                    container.appendChild(item);
-
-                    document.getElementById(`answer-${docSnapshot.id}`).addEventListener('click', () => {
-                        answerCall(docSnapshot.id, data.clientName);
+                    container.appendChild(li);
+                    
+                    document.getElementById(`btn-${id}`).addEventListener('click', () => {
+                        acceptCall(id, call.clientName);
                     });
+                } 
+                else if (id === currentActiveCallId && call.status === "ended") {
+                    resetOperatorUI();
+                }
+                else if (id === currentActiveCallId && call.clientCandidate && opPeer) {
+                    if (opPeer.currentRemoteDescription) {
+                        try { opPeer.addIceCandidate(new RTCIceCandidate(call.clientCandidate)); } catch(e){}
+                    }
                 }
             });
 
-            if(!hasWaiting) {
-                container.innerHTML = `<p style="color: var(--text-muted); text-align:center; font-size:14px;">لا يوجد أحد في الانتظار حالياً.</p>`;
+            if (!hasWaiting) {
+                container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
             }
         });
 
-        async function answerCall(id, clientName) {
-            opCallId = id;
+        async function acceptCall(callId, clientName) {
+            if (currentActiveCallId) { alert("أنت في مكالمة نشطة بالفعل!"); return; }
+            
             try {
+                currentActiveCallId = callId;
+                document.getElementById('currentClientName').innerText = `جاري التحدث مع: ${clientName}`;
+                document.getElementById('activeCallArea').style.display = 'block';
+
                 opStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 opPeer = new RTCPeerConnection(rtcConfig);
 
@@ -118,51 +148,52 @@
                 opPeer.ontrack = (e) => { document.getElementById('operatorAudio').srcObject = e.streams[0]; };
 
                 opPeer.onicecandidate = async (e) => {
-                    if (e.candidate && opCallId) {
-                        await updateDoc(doc(db, "callsQueue", opCallId), { opCandidate: e.candidate.toJSON() });
+                    if (e.candidate && currentActiveCallId) {
+                        await update(ref(db, `callsQueue/${currentActiveCallId}`), { opCandidate: e.candidate.toJSON() });
                     }
                 };
 
                 const offer = await opPeer.createOffer();
                 await opPeer.setLocalDescription(offer);
-
-                await updateDoc(doc(db, "callsQueue", opCallId), {
+                
+                await update(ref(db, `callsQueue/${callId}`), {
                     status: "active",
                     offer: { type: offer.type, sdp: offer.sdp }
                 });
 
-                document.getElementById('activeClientName').innerText = `العميل: ${clientName}`;
-                document.getElementById('activeCallBox').style.display = "block";
-
-                opUnsub = onSnapshot(doc(db, "callsQueue", opCallId), async (snapshot) => {
-                    const data = snapshot.data();
-                    if (!data) return;
-
-                    if(data.answer && !opPeer.currentRemoteDescription) {
-                        await opPeer.setRemoteDescription(new RTCSessionDescription(data.answer));
+                const answerRef = ref(db, `callsQueue/${callId}/answer`);
+                onValue(answerRef, async (snapshot) => {
+                    const answer = snapshot.val();
+                    if (answer && opPeer && !opPeer.currentRemoteDescription) {
+                        await opPeer.setRemoteDescription(new RTCSessionDescription(answer));
                     }
-                    if (data.clientCandidate && opPeer.currentRemoteDescription) {
-                        try { await opPeer.addIceCandidate(new RTCIceCandidate(data.clientCandidate)); } catch(err) {}
-                    }
-                    if(data.status === "ended") { resetOperatorUI(); }
                 });
-            } catch(e) { alert("فشل في الوصول للميكروفون للمشغل."); }
+
+            } catch (err) {
+                alert("يرجى تفعيل صلاحية الميكروفون للمشغل.");
+                resetOperatorUI();
+            }
         }
 
-        async function opTerminate() {
-            if(opCallId) { await updateDoc(doc(db, "callsQueue", opCallId), { status: "ended" }); }
-            resetOperatorUI();
+        async function operatorTerminate() {
+            if (currentActiveCallId) {
+                const targetId = currentActiveCallId;
+                await update(ref(db, `callsQueue/${targetId}`), { status: "ended" });
+                setTimeout(async () => {
+                    try { await remove(ref(db, `callsQueue/${targetId}`)); } catch(e){}
+                }, 1000);
+                resetOperatorUI();
+            }
         }
 
         function resetOperatorUI() {
-            if (opUnsub) { opUnsub(); opUnsub = null; }
             if (opPeer) { opPeer.close(); opPeer = null; }
             if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
-            opCallId = null;
-            document.getElementById('activeCallBox').style.display = "none";
+            currentActiveCallId = null;
+            document.getElementById('activeCallArea').style.display = 'none';
         }
 
-        document.getElementById('endCallOpBtn').addEventListener('click', opTerminate);
+        document.getElementById('endCallOpBtn').addEventListener('click', operatorTerminate);
     </script>
 </body>
 </html>
