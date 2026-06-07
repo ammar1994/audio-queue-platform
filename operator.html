@@ -36,12 +36,11 @@
         .active-call-box { display: none; text-align: center; padding: 30px 10px; background-color: rgba(16, 185, 129, 0.1); border: 2px dashed var(--success); border-radius: 8px; }
         .active-name { font-size: 22px; font-weight: 700; color: var(--success); margin-bottom: 15px; }
         .empty-msg { color: var(--text-muted); text-align: center; font-style: italic; padding: 20px 0; }
-        audio { display: none; }
+        .audio-wrapper { margin-top: 15px; background: #0f172a; padding: 10px; border-radius: 8px; display: none; }
+        audio { width: 100%; height: 40px; }
     </style>
 </head>
 <body>
-
-    <audio id="operatorAudio" autoplay controls></audio>
 
     <div class="dashboard">
         <h1>لوحة تحكم مشغّل النظام الفني</h1>
@@ -50,7 +49,13 @@
             <div class="card active-call-box" id="activeCallArea">
                 <h2>المكالمة الحالية النشطة</h2>
                 <div class="active-name" id="currentClientName">جاري التحدث مع: ...</div>
-                <button class="btn btn-danger" id="endCallOpBtn">إنهاء المكالمة الحالية</button>
+                
+                <div class="audio-wrapper" id="audioContainerOp">
+                    <p style="font-size:12px; color:var(--text-muted); margin-bottom:5px;">صوت العميل المتصل:</p>
+                    <audio id="operatorAudio" autoplay controls></audio>
+                </div>
+
+                <button class="btn btn-danger" id="endCallOpBtn" style="margin-top: 15px;">إنهاء المكالمة الحالية</button>
             </div>
 
             <div class="card">
@@ -145,7 +150,13 @@
                 opPeer = new RTCPeerConnection(rtcConfig);
 
                 opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
-                opPeer.ontrack = (e) => { document.getElementById('operatorAudio').srcObject = e.streams[0]; };
+                
+                opPeer.ontrack = (e) => { 
+                    const audioEl = document.getElementById('operatorAudio');
+                    audioEl.srcObject = e.streams[0];
+                    document.getElementById('audioContainerOp').style.display = 'block';
+                    audioEl.play().catch(err => console.log("تفعيل تشغيل الصوت:", err));
+                };
 
                 opPeer.onicecandidate = async (e) => {
                     if (e.candidate && currentActiveCallId) {
@@ -191,6 +202,7 @@
             if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
             currentActiveCallId = null;
             document.getElementById('activeCallArea').style.display = 'none';
+            document.getElementById('audioContainerOp').style.display = 'none';
         }
 
         document.getElementById('endCallOpBtn').addEventListener('click', operatorTerminate);
