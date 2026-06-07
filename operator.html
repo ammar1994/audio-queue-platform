@@ -69,7 +69,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, onValue, update, remove, push, set, off } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCAEQyqtcW26k7yc-vKQMpfQgmWXDPP0yw",
@@ -94,13 +94,14 @@
         onValue(queueRef, (snapshot) => {
             const data = snapshot.val();
             const container = document.getElementById('queueContainer');
-            container.innerHTML = "";
-
+            
             if (!data) {
                 container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
+                if(currentActiveCallId) { resetOperatorUI(); }
                 return;
             }
 
+            container.innerHTML = "";
             let hasWaiting = false;
 
             Object.keys(data).forEach(id => {
@@ -123,13 +124,9 @@
                         acceptCall(id, call.clientName);
                     });
                 } 
-                else if (id === currentActiveCallId && call.status === "ended") {
+                
+                if (id === currentActiveCallId && call.status === "ended") {
                     resetOperatorUI();
-                }
-                else if (id === currentActiveCallId && call.clientCandidate && opPeer) {
-                    if (opPeer.currentRemoteDescription) {
-                        try { opPeer.addIceCandidate(new RTCIceCandidate(call.clientCandidate)); } catch(e){}
-                    }
                 }
             });
 
@@ -155,12 +152,13 @@
                     const audioEl = document.getElementById('operatorAudio');
                     audioEl.srcObject = e.streams[0];
                     document.getElementById('audioContainerOp').style.display = 'block';
-                    audioEl.play().catch(err => console.log("تفعيل تشغيل الصوت:", err));
+                    audioEl.play().catch(err => console.log("Audio playing issue handled:", err));
                 };
 
                 opPeer.onicecandidate = async (e) => {
                     if (e.candidate && currentActiveCallId) {
-                        await update(ref(db, `callsQueue/${currentActiveCallId}`), { opCandidate: e.candidate.toJSON() });
+                        const candRef = push(ref(db, `callsQueue/${currentActiveCallId}/opCandidates`));
+                        await set(candRef, e.candidate.toJSON());
                     }
                 };
 
@@ -172,11 +170,20 @@
                     offer: { type: offer.type, sdp: offer.sdp }
                 });
 
-                const answerRef = ref(db, `callsQueue/${callId}/answer`);
-                onValue(answerRef, async (snapshot) => {
+                // الاستماع للإجابة من العميل
+                onValue(ref(db, `callsQueue/${callId}/answer`), async (snapshot) => {
                     const answer = snapshot.val();
                     if (answer && opPeer && !opPeer.currentRemoteDescription) {
                         await opPeer.setRemoteDescription(new RTCSessionDescription(answer));
+                    }
+                });
+
+                // الاستماع للـ Candidates القادمة من العميل بشكل فوري ومتكرر
+                onValue(ref(db, `callsQueue/${callId}/clientCandidates`), (snapshot) => {
+                    if (snapshot.exists() && opPeer && opPeer.currentRemoteDescription) {
+                        snapshot.forEach((child) => {
+                            try { opPeer.addIceCandidate(new RTCIceCandidate(child.val())); } catch(e){}
+                        });
                     }
                 });
 
@@ -192,12 +199,16 @@
                 await update(ref(db, `callsQueue/${targetId}`), { status: "ended" });
                 setTimeout(async () => {
                     try { await remove(ref(db, `callsQueue/${targetId}`)); } catch(e){}
-                }, 1000);
+                }, 500);
                 resetOperatorUI();
             }
         }
 
         function resetOperatorUI() {
+            if(currentActiveCallId) {
+                off(ref(db, `callsQueue/${currentActiveCallId}/answer`));
+                off(ref(db, `callsQueue/${currentActiveCallId}/clientCandidates`));
+            }
             if (opPeer) { opPeer.close(); opPeer = null; }
             if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
             currentActiveCallId = null;
