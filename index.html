@@ -57,7 +57,7 @@
             
             <div class="audio-wrapper" id="audioContainer">
                 <p style="font-size:12px; color:var(--text-muted); margin-bottom:5px;">صوت المشغل المتصل:</p>
-                <audio id="clientAudio" autoplay controls></audio>
+                <audio id="clientAudio" autoplay playsinline controls></audio>
             </div>
 
             <button class="btn btn-danger" id="endCallClientBtn" style="display: none;">إنهاء المكالمة</button>
@@ -101,11 +101,26 @@
                 
                 clientStream.getTracks().forEach(track => clientPeer.addTrack(track, clientStream));
                 
+                // تحسين التقاط الـ Track ليعمل فوراً دون تأخر
                 clientPeer.ontrack = (e) => { 
                     const audioEl = document.getElementById('clientAudio');
-                    audioEl.srcObject = e.streams[0];
+                    if (e.streams && e.streams[0]) {
+                        audioEl.srcObject = e.streams[0];
+                    } else {
+                        const remoteStream = new MediaStream();
+                        remoteStream.addTrack(e.track);
+                        audioEl.srcObject = remoteStream;
+                    }
                     document.getElementById('audioContainer').style.display = 'block';
-                    audioEl.play().catch(err => console.log("Autoplay context captured:", err));
+                    
+                    // إجبار المتصفح على كسر حظر الـ Autoplay
+                    setTimeout(() => {
+                        audioEl.play().catch(err => {
+                            console.log("حظر التشغيل التلقائي نشط، جاري المحاولة بصيغة أخرى:", err);
+                            audioEl.muted = false;
+                            audioEl.play();
+                        });
+                    }, 300);
                 };
 
                 const queueRef = ref(db, "callsQueue");
@@ -126,7 +141,6 @@
                     }
                 };
 
-                // الاستماع للتغيرات في مرجع المكالمة الحالية
                 onValue(callDbRef, async (snapshot) => {
                     const data = snapshot.val();
                     if (!data) return;
@@ -148,7 +162,6 @@
                     }
                 });
 
-                // الاستماع المتكرر والمنفصل للـ Candidates القادمة من المشغل
                 const opCandRef = ref(db, `callsQueue/${clientCallId}/opCandidates`);
                 onValue(opCandRef, (snapshot) => {
                     if (snapshot.exists() && clientPeer && clientPeer.currentRemoteDescription) {
