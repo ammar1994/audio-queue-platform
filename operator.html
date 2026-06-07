@@ -2,44 +2,50 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>اتصال مباشر</title>
-    <style>
-        body { background: #0f172a; color: white; font-family: sans-serif; text-align: center; padding: 50px; }
-        .btn { padding: 20px 40px; background: #2563eb; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 18px; }
-    </style>
+    <title>لوحة المشغل</title>
 </head>
 <body>
-    <button class="btn" id="start">بدء الاتصال</button>
+    <div id="queue"></div>
     <audio id="remoteAudio" autoplay></audio>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, onValue, update, push } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
         
         const db = getDatabase(initializeApp({ /* أعد بيانات الـ firebase هنا */ }));
         const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
-        document.getElementById('start').onclick = async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
             stream.getTracks().forEach(t => pc.addTrack(t, stream));
-            
-            const callRef = push(ref(db, "calls"));
-            window.callId = callRef.key;
-            await set(callRef, { status: "waiting" });
+        });
 
-            pc.onicecandidate = e => { if(e.candidate) push(ref(db, `calls/${window.callId}/clientIce`), e.candidate.toJSON()); };
-            pc.ontrack = e => document.getElementById('remoteAudio').srcObject = e.streams[0];
+        pc.ontrack = e => document.getElementById('remoteAudio').srcObject = e.streams[0];
 
-            onValue(ref(db, `calls/${window.callId}`), async (snap) => {
-                const data = snap.val();
-                if(data?.status === "active" && !pc.remoteDescription) {
-                    await pc.setRemoteDescription(data.offer);
-                    const ans = await pc.createAnswer();
-                    await pc.setLocalDescription(ans);
-                    update(ref(db, `calls/${window.callId}`), { answer: ans });
+        onValue(ref(db, "calls"), (snap) => {
+            const data = snap.val();
+            const q = document.getElementById('queue');
+            q.innerHTML = "";
+            for(let id in data) {
+                if(data[id].status === "waiting") {
+                    let btn = document.createElement('button');
+                    btn.innerText = "رد على " + id;
+                    btn.onclick = () => answer(id);
+                    q.appendChild(btn);
                 }
+            }
+        });
+
+        async function answer(id) {
+            window.callId = id;
+            pc.onicecandidate = e => { if(e.candidate) push(ref(db, `calls/${id}/opIce`), e.candidate.toJSON()); };
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            update(ref(db, `calls/${id}`), { status: "active", offer });
+            
+            onValue(ref(db, `calls/${id}/answer`), async (snap) => {
+                if(snap.val() && !pc.remoteDescription) await pc.setRemoteDescription(snap.val());
             });
-        };
+        }
     </script>
 </body>
 </html>
