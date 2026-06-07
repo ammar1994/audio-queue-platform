@@ -52,7 +52,7 @@
                 
                 <div class="audio-wrapper" id="audioContainerOp">
                     <p style="font-size:12px; color:var(--text-muted); margin-bottom:5px;">صوت العميل المتصل:</p>
-                    <audio id="operatorAudio" autoplay controls></audio>
+                    <audio id="operatorAudio" autoplay playsinline controls></audio>
                 </div>
 
                 <button class="btn btn-danger" id="endCallOpBtn" style="margin-top: 15px;">إنهاء المكالمة الحالية</button>
@@ -148,11 +148,25 @@
 
                 opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
                 
+                // تحسين التقاط الصوت للمشغل وفك حظر التشغيل
                 opPeer.ontrack = (e) => { 
                     const audioEl = document.getElementById('operatorAudio');
-                    audioEl.srcObject = e.streams[0];
+                    if (e.streams && e.streams[0]) {
+                        audioEl.srcObject = e.streams[0];
+                    } else {
+                        const remoteStream = new MediaStream();
+                        remoteStream.addTrack(e.track);
+                        audioEl.srcObject = remoteStream;
+                    }
                     document.getElementById('audioContainerOp').style.display = 'block';
-                    audioEl.play().catch(err => console.log("Audio playing issue handled:", err));
+                    
+                    setTimeout(() => {
+                        audioEl.play().catch(err => {
+                            console.log("Autoplay issue on operator side handled:", err);
+                            audioEl.muted = false;
+                            audioEl.play();
+                        });
+                    }, 300);
                 };
 
                 opPeer.onicecandidate = async (e) => {
@@ -170,7 +184,6 @@
                     offer: { type: offer.type, sdp: offer.sdp }
                 });
 
-                // الاستماع للإجابة من العميل
                 onValue(ref(db, `callsQueue/${callId}/answer`), async (snapshot) => {
                     const answer = snapshot.val();
                     if (answer && opPeer && !opPeer.currentRemoteDescription) {
@@ -178,7 +191,6 @@
                     }
                 });
 
-                // الاستماع للـ Candidates القادمة من العميل بشكل فوري ومتكرر
                 onValue(ref(db, `callsQueue/${callId}/clientCandidates`), (snapshot) => {
                     if (snapshot.exists() && opPeer && opPeer.currentRemoteDescription) {
                         snapshot.forEach((child) => {
