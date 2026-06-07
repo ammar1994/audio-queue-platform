@@ -32,7 +32,6 @@
         .status-box { display: none; margin-top: 20px; padding: 20px; border-radius: 12px; background-color: rgba(37, 99, 235, 0.1); border: 1px dashed var(--primary); }
         .pulse-loader { width: 64px; height: 64px; background-color: var(--primary); border-radius: 50%; margin: 20px auto; animation: pulse 1.5s infinite ease-in-out; }
         @keyframes pulse { 0% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.8); opacity: 0.5; } }
-        /* تحسينات مشغل الصوت لضمان التشغيل */
         .audio-wrapper { margin-top: 15px; background: #0f172a; padding: 10px; border-radius: 8px; display: none; }
         audio { width: 100%; height: 40px; }
     </style>
@@ -52,7 +51,7 @@
         </div>
 
         <div class="status-box" id="queueStatus">
-            <div class="pulse-loader"></div>
+            <div class="pulse-loader" id="loader"></div>
             <h3 id="queueText">أنت في قائمة الانتظار...</h3>
             <p style="color: var(--text-muted); margin-top: 10px;" id="queueSubtext">يرجى الانتظار، سيتم تحويلك تلقائياً فور تفرغ المشغّل.</p>
             
@@ -67,7 +66,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, push, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import { getDatabase, ref, push, set, onValue, update, remove, off } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCAEQyqtcW26k7yc-vKQMpfQgmWXDPP0yw",
@@ -87,7 +86,7 @@
         let clientStream = null;
         let clientPeer = null;
         let clientCallId = null;
-        let clientRef = null;
+        let callDbRef = null;
 
         document.getElementById('startCallBtn').addEventListener('click', async () => {
             const name = document.getElementById('username').value.trim();
@@ -106,16 +105,15 @@
                     const audioEl = document.getElementById('clientAudio');
                     audioEl.srcObject = e.streams[0];
                     document.getElementById('audioContainer').style.display = 'block';
-                    // إجبار المتصفح على تشغيل الصوت للتغلب على قيود Autoplay
-                    audioEl.play().catch(err => console.log("بحاجة لتفاعل لتشغيل الصوت:", err));
+                    audioEl.play().catch(err => console.log("Autoplay context captured:", err));
                 };
 
                 const queueRef = ref(db, "callsQueue");
                 const newCallRef = push(queueRef);
                 clientCallId = newCallRef.key;
-                clientRef = newCallRef;
+                callDbRef = newCallRef;
 
-                await set(clientRef, {
+                await set(callDbRef, {
                     clientName: name,
                     status: "waiting",
                     createdAt: Date.now()
@@ -123,17 +121,20 @@
 
                 clientPeer.onicecandidate = async (e) => {
                     if (e.candidate && clientCallId) {
-                        await update(ref(db, `callsQueue/${clientCallId}`), { clientCandidate: e.candidate.toJSON() });
+                        const candRef = push(ref(db, `callsQueue/${clientCallId}/clientCandidates`));
+                        await set(candRef, e.candidate.toJSON());
                     }
                 };
 
-                onValue(clientRef, async (snapshot) => {
+                // الاستماع للتغيرات في مرجع المكالمة الحالية
+                onValue(callDbRef, async (snapshot) => {
                     const data = snapshot.val();
                     if (!data) return;
 
                     if(data.status === "active" && data.offer && !clientPeer.currentRemoteDescription) {
                         document.getElementById('queueText').innerText = "أنت في مكالمة مباشرة الآن";
                         document.getElementById('queueSubtext').innerText = "جاري التحدث مع الموظف الفني...";
+                        document.getElementById('loader').style.display = 'none';
                         document.getElementById('endCallClientBtn').style.display = 'block';
 
                         await clientPeer.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -142,33 +143,50 @@
                         await update(ref(db, `callsQueue/${clientCallId}`), { answer: { type: answer.type, sdp: answer.sdp } });
                     }
                     
-                    if (data.opCandidate && clientPeer.currentRemoteDescription) {
-                        try { await clientPeer.addIceCandidate(new RTCIceCandidate(data.opCandidate)); } catch(err) {}
+                    if(data.status === "ended") { 
+                        cleanClientResources(); 
                     }
+                });
 
-                    if(data.status === "ended") { resetClientUI(); }
+                // الاستماع المتكرر والمنفصل للـ Candidates القادمة من المشغل
+                const opCandRef = ref(db, `callsQueue/${clientCallId}/opCandidates`);
+                onValue(opCandRef, (snapshot) => {
+                    if (snapshot.exists() && clientPeer && clientPeer.currentRemoteDescription) {
+                        snapshot.forEach((child) => {
+                            try { clientPeer.addIceCandidate(new RTCIceCandidate(child.val())); } catch(e){}
+                        });
+                    }
                 });
 
             } catch (err) {
-                alert("يرجى تفعيل صلاحية الميكروفون للاتصال.");
+                alert("يرجى تفعيل صلاحية الميكروفون للاتصال والتحقق من التراكبات.");
                 document.getElementById('joinForm').style.display = 'block';
                 document.getElementById('queueStatus').style.display = 'none';
             }
         });
 
         async function clientTerminate() {
-            if(clientCallId) { await update(ref(db, `callsQueue/${clientCallId}`), { status: "ended" }); }
-            resetClientUI();
+            if(clientCallId) { 
+                await update(ref(db, `callsQueue/${clientCallId}`), { status: "ended" });
+                setTimeout(async () => {
+                    try { await remove(ref(db, `callsQueue/${clientCallId}`)); } catch(e){}
+                }, 500);
+            }
+            cleanClientResources();
         }
 
-        function resetClientUI() {
+        function cleanClientResources() {
+            if(callDbRef) { off(callDbRef); }
+            if(clientCallId) { off(ref(db, `callsQueue/${clientCallId}/opCandidates`)); }
             if (clientPeer) { clientPeer.close(); clientPeer = null; }
             if (clientStream) { clientStream.getTracks().forEach(t => t.stop()); clientStream = null; }
             clientCallId = null;
+            
             document.getElementById('joinForm').style.display = 'block';
             document.getElementById('queueStatus').style.display = 'none';
             document.getElementById('endCallClientBtn').style.display = 'none';
             document.getElementById('audioContainer').style.display = 'none';
+            document.getElementById('loader').style.display = 'block';
             document.getElementById('queueText').innerText = "أنت في قائمة الانتظار...";
         }
 
