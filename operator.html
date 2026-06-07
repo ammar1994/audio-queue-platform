@@ -24,7 +24,7 @@
         .card { background-color: var(--card-dark); border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); border: 1px solid #334155; }
         h2 { font-size: 18px; margin-bottom: 15px; color: var(--text-muted); }
         .queue-list { list-style: none; }
-        .queue-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background-color: var(--bg-dark); border-radius: 8px; margin-bottom: 10px; border: 1px solid #1e293b; }
+        .queue-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background-color: var(--bg-dark); border-radius: 8px; margin-bottom: 10px; border: 1px solid #334155; }
         .client-info { text-align: right; }
         .client-name { font-weight: 600; font-size: 16px; }
         .client-time { font-size: 12px; color: var(--text-muted); }
@@ -97,7 +97,6 @@
             
             if (!data) {
                 container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
-                if(currentActiveCallId) { resetOperatorUI(); }
                 return;
             }
 
@@ -106,50 +105,50 @@
 
             Object.keys(data).forEach(id => {
                 const call = data[id];
-                
                 if (call.status === "waiting") {
                     hasWaiting = true;
                     const li = document.createElement('li');
-                    li.className = "queue-item";
+                    li.className = 'queue-item';
                     li.innerHTML = `
                         <div class="client-info">
                             <div class="client-name">${call.clientName}</div>
-                            <div class="client-time">ينتظر الاتصال...</div>
+                            <div class="client-time">ينتظر في القائمة...</div>
                         </div>
-                        <button class="btn btn-success" id="btn-${id}">الرد على المكالمة</button>
+                        <button class="btn btn-success accept-btn" data-id="${id}" data-name="${call.clientName}">قبول المكالمة</button>
                     `;
                     container.appendChild(li);
-                    
-                    document.getElementById(`btn-${id}`).addEventListener('click', () => {
-                        acceptCall(id, call.clientName);
-                    });
-                } 
-                
-                if (id === currentActiveCallId && call.status === "ended") {
-                    resetOperatorUI();
                 }
             });
 
             if (!hasWaiting) {
                 container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
             }
+
+            // ربط الحدث لأزرار القبول المضافة حديثاً
+            document.querySelectorAll('.accept-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const callId = e.target.getAttribute('data-id');
+                    const clientName = e.target.getAttribute('data-name');
+                    answerCall(callId, clientName);
+                });
+            });
         });
 
-        async function acceptCall(callId, clientName) {
-            if (currentActiveCallId) { alert("أنت في مكالمة نشطة بالفعل!"); return; }
-            
+        async function answerCall(callId, clientName) {
             try {
                 currentActiveCallId = callId;
-                document.getElementById('currentClientName').innerText = `جاري التحدث مع: ${clientName}`;
                 document.getElementById('activeCallArea').style.display = 'block';
+                document.getElementById('currentClientName').innerText = `جاري التحدث مع: ${clientName}`;
 
+                // 1. تشغيل الميكروفون للمشغّل
                 opStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 opPeer = new RTCPeerConnection(rtcConfig);
 
+                // 2. ربط مسارات الصوت
                 opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
-                
-                // تحسين التقاط الصوت للمشغل وفك حظر التشغيل
-                opPeer.ontrack = (e) => { 
+
+                // 3. استقبال الصوت من العميل
+                opPeer.ontrack = (e) => {
                     const audioEl = document.getElementById('operatorAudio');
                     if (e.streams && e.streams[0]) {
                         audioEl.srcObject = e.streams[0];
@@ -159,16 +158,13 @@
                         audioEl.srcObject = remoteStream;
                     }
                     document.getElementById('audioContainerOp').style.display = 'block';
-                    
-                    setTimeout(() => {
-                        audioEl.play().catch(err => {
-                            console.log("Autoplay issue on operator side handled:", err);
-                            audioEl.muted = false;
-                            audioEl.play();
-                        });
-                    }, 300);
+                    audioEl.play().catch(() => {
+                        audioEl.muted = false;
+                        audioEl.play();
+                    });
                 };
 
+                // 4. إرسال ICE Candidates للمشغّل إلى الـ Database
                 opPeer.onicecandidate = async (e) => {
                     if (e.candidate && currentActiveCallId) {
                         const candRef = push(ref(db, `callsQueue/${currentActiveCallId}/opCandidates`));
@@ -176,22 +172,32 @@
                     }
                 };
 
+                // 5. إنشاء الـ Offer ورفعه للـ Firebase ليقرأه العميل
                 const offer = await opPeer.createOffer();
                 await opPeer.setLocalDescription(offer);
                 
-                await update(ref(db, `callsQueue/${callId}`), {
+                await update(ref(db, `callsQueue/${currentActiveCallId}`), {
                     status: "active",
                     offer: { type: offer.type, sdp: offer.sdp }
                 });
 
-                onValue(ref(db, `callsQueue/${callId}/answer`), async (snapshot) => {
-                    const answer = snapshot.val();
-                    if (answer && opPeer && !opPeer.currentRemoteDescription) {
-                        await opPeer.setRemoteDescription(new RTCSessionDescription(answer));
+                // 6. مراقبة استجابة العميل (Answer) أو إنهاء المكالمة
+                onValue(ref(db, `callsQueue/${currentActiveCallId}`), async (snapshot) => {
+                    const data = snapshot.val();
+                    if (!data) return;
+
+                    if (data.answer && !opPeer.currentRemoteDescription) {
+                        await opPeer.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    }
+
+                    if (data.status === "ended") {
+                        resetOperatorUI();
                     }
                 });
 
-                onValue(ref(db, `callsQueue/${callId}/clientCandidates`), (snapshot) => {
+                // 7. الاستماع الفوري للـ Candidates القادمة من العميل وضخها بالنفق
+                const clientCandRef = ref(db, `callsQueue/${currentActiveCallId}/clientCandidates`);
+                onValue(clientCandRef, (snapshot) => {
                     if (snapshot.exists() && opPeer && opPeer.currentRemoteDescription) {
                         snapshot.forEach((child) => {
                             try { opPeer.addIceCandidate(new RTCIceCandidate(child.val())); } catch(e){}
@@ -200,35 +206,36 @@
                 });
 
             } catch (err) {
-                alert("يرجى تفعيل صلاحية الميكروفون للمشغل.");
+                alert("يرجى إعطاء صلاحية الميكروفون للمتصفح.");
                 resetOperatorUI();
             }
         }
 
-        async function operatorTerminate() {
+        async function terminateCall() {
             if (currentActiveCallId) {
-                const targetId = currentActiveCallId;
-                await update(ref(db, `callsQueue/${targetId}`), { status: "ended" });
+                await update(ref(db, `callsQueue/${currentActiveCallId}`), { status: "ended" });
                 setTimeout(async () => {
-                    try { await remove(ref(db, `callsQueue/${targetId}`)); } catch(e){}
-                }, 500);
-                resetOperatorUI();
+                    try { await remove(ref(db, `callsQueue/${currentActiveCallId}`)); } catch(e){}
+                }, 400);
             }
+            resetOperatorUI();
         }
 
         function resetOperatorUI() {
-            if(currentActiveCallId) {
-                off(ref(db, `callsQueue/${currentActiveCallId}/answer`));
+            if (currentActiveCallId) {
+                off(ref(db, `callsQueue/${currentActiveCallId}`));
                 off(ref(db, `callsQueue/${currentActiveCallId}/clientCandidates`));
             }
             if (opPeer) { opPeer.close(); opPeer = null; }
             if (opStream) { opStream.getTracks().forEach(t => t.stop()); opStream = null; }
             currentActiveCallId = null;
+
             document.getElementById('activeCallArea').style.display = 'none';
             document.getElementById('audioContainerOp').style.display = 'none';
+            document.getElementById('currentClientName').innerText = "جاري التحدث مع: ...";
         }
 
-        document.getElementById('endCallOpBtn').addEventListener('click', operatorTerminate);
+        document.getElementById('endCallOpBtn').addEventListener('click', terminateCall);
     </script>
 </body>
 </html>
