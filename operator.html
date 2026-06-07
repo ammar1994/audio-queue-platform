@@ -84,7 +84,16 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const rtcConfig = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
+        
+        // خوادم الـ ICE المحدثة بـ خوادم TURN لحل مشكلة عدم انتقال الصوت عبر جدران الحماية للشركات الخلوية
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
+        };
 
         let opStream = null;
         let opPeer = null;
@@ -124,7 +133,6 @@
                 container.innerHTML = '<li class="empty-msg" id="emptyMessage">لا يوجد عملاء في قائمة الانتظار حالياً...</li>';
             }
 
-            // ربط الحدث لأزرار القبول المضافة حديثاً
             document.querySelectorAll('.accept-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const callId = e.target.getAttribute('data-id');
@@ -140,14 +148,11 @@
                 document.getElementById('activeCallArea').style.display = 'block';
                 document.getElementById('currentClientName').innerText = `جاري التحدث مع: ${clientName}`;
 
-                // 1. تشغيل الميكروفون للمشغّل
                 opStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 opPeer = new RTCPeerConnection(rtcConfig);
 
-                // 2. ربط مسارات الصوت
                 opStream.getTracks().forEach(track => opPeer.addTrack(track, opStream));
 
-                // 3. استقبال الصوت من العميل
                 opPeer.ontrack = (e) => {
                     const audioEl = document.getElementById('operatorAudio');
                     if (e.streams && e.streams[0]) {
@@ -164,7 +169,6 @@
                     });
                 };
 
-                // 4. إرسال ICE Candidates للمشغّل إلى الـ Database
                 opPeer.onicecandidate = async (e) => {
                     if (e.candidate && currentActiveCallId) {
                         const candRef = push(ref(db, `callsQueue/${currentActiveCallId}/opCandidates`));
@@ -172,7 +176,6 @@
                     }
                 };
 
-                // 5. إنشاء الـ Offer ورفعه للـ Firebase ليقرأه العميل
                 const offer = await opPeer.createOffer();
                 await opPeer.setLocalDescription(offer);
                 
@@ -181,7 +184,6 @@
                     offer: { type: offer.type, sdp: offer.sdp }
                 });
 
-                // 6. مراقبة استجابة العميل (Answer) أو إنهاء المكالمة
                 onValue(ref(db, `callsQueue/${currentActiveCallId}`), async (snapshot) => {
                     const data = snapshot.val();
                     if (!data) return;
@@ -195,7 +197,6 @@
                     }
                 });
 
-                // 7. الاستماع الفوري للـ Candidates القادمة من العميل وضخها بالنفق
                 const clientCandRef = ref(db, `callsQueue/${currentActiveCallId}/clientCandidates`);
                 onValue(clientCandRef, (snapshot) => {
                     if (snapshot.exists() && opPeer && opPeer.currentRemoteDescription) {
