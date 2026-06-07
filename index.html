@@ -90,7 +90,7 @@
 
         document.getElementById('startCallBtn').addEventListener('click', async () => {
             const name = document.getElementById('username').value.trim();
-            if(!name) { alert('الرجاء إدخال الاسم أولاً'); return; }
+            if(!name) { alert('الرجاء إدخل الاسم أولاً'); return; }
 
             try {
                 document.getElementById('joinForm').style.display = 'none';
@@ -99,9 +99,9 @@
                 clientStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 clientPeer = new RTCPeerConnection(rtcConfig);
                 
+                // إضافة الميكروفون إلى النفق فوراً
                 clientStream.getTracks().forEach(track => clientPeer.addTrack(track, clientStream));
                 
-                // تحسين التقاط الـ Track ليعمل فوراً دون تأخر
                 clientPeer.ontrack = (e) => { 
                     const audioEl = document.getElementById('clientAudio');
                     if (e.streams && e.streams[0]) {
@@ -112,15 +112,10 @@
                         audioEl.srcObject = remoteStream;
                     }
                     document.getElementById('audioContainer').style.display = 'block';
-                    
-                    // إجبار المتصفح على كسر حظر الـ Autoplay
-                    setTimeout(() => {
-                        audioEl.play().catch(err => {
-                            console.log("حظر التشغيل التلقائي نشط، جاري المحاولة بصيغة أخرى:", err);
-                            audioEl.muted = false;
-                            audioEl.play();
-                        });
-                    }, 300);
+                    audioEl.play().catch(() => {
+                        audioEl.muted = false;
+                        audioEl.play();
+                    });
                 };
 
                 const queueRef = ref(db, "callsQueue");
@@ -162,6 +157,7 @@
                     }
                 });
 
+                // الاستماع للـ Candidates القادمة من المدير بشكل فوري
                 const opCandRef = ref(db, `callsQueue/${clientCallId}/opCandidates`);
                 onValue(opCandRef, (snapshot) => {
                     if (snapshot.exists() && clientPeer && clientPeer.currentRemoteDescription) {
@@ -172,9 +168,8 @@
                 });
 
             } catch (err) {
-                alert("يرجى تفعيل صلاحية الميكروفون للاتصال والتحقق من التراكبات.");
-                document.getElementById('joinForm').style.display = 'block';
-                document.getElementById('queueStatus').style.display = 'none';
+                alert("يرجى تفعيل صلاحية الميكروفون.");
+                cleanClientResources();
             }
         });
 
@@ -183,7 +178,7 @@
                 await update(ref(db, `callsQueue/${clientCallId}`), { status: "ended" });
                 setTimeout(async () => {
                     try { await remove(ref(db, `callsQueue/${clientCallId}`)); } catch(e){}
-                }, 500);
+                }, 400);
             }
             cleanClientResources();
         }
